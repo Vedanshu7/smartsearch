@@ -69,4 +69,4 @@ smartsearch/
 
 ## License
 
-MIT
+[MIT](LICENSE)

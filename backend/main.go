@@ -1,18 +1,21 @@
-// smartsearch backend — parses natural language search queries with OpenAI
+// smartsearch backend: parses natural language search queries with an LLM
 // and returns an optimised Google search URL.
 //
 // Environment variables:
 //
-//	OPENAI_API_KEY  (required) Your OpenAI API key
+//	LLM_PROVIDER    (optional) LLM provider to use: openai | anthropic | gemini | groq (default: openai)
+//	LLM_MODEL       (optional) Override the default model for the chosen provider
+//	OPENAI_API_KEY  (required for openai)  Your OpenAI API key
+//	ANTHROPIC_API_KEY (required for anthropic) Your Anthropic API key
+//	GEMINI_API_KEY  (required for gemini)  Your Google Gemini API key
+//	GROQ_API_KEY    (required for groq)    Your Groq API key
 //	PORT            (optional) HTTP listen port, default 8080
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -21,12 +24,15 @@ import (
 	"sync"
 	"time"
 
+	llmbridge "github.com/Vedanshu7/llmbridge"
+	"github.com/Vedanshu7/llmbridge/llms/anthropic"
+	"github.com/Vedanshu7/llmbridge/llms/compatible"
+	"github.com/Vedanshu7/llmbridge/llms/gemini"
+	"github.com/Vedanshu7/llmbridge/llms/openai"
 	"golang.org/x/time/rate"
 )
 
-const openAIURL = "https://api.openai.com/v1/chat/completions"
-
-// SearchIntent is the structured representation OpenAI extracts from a
+// SearchIntent is the structured representation the LLM extracts from a
 // natural language query.
 type SearchIntent struct {
 	MainQuery    string   `json:"main_query"`
@@ -37,31 +43,6 @@ type SearchIntent struct {
 	DateRange    string   `json:"date_range,omitempty"`
 }
 
-// openAIMessage is a single chat turn sent to the completions endpoint.
-type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// openAIRequest is the JSON body for a chat completions call.
-type openAIRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openAIMessage `json:"messages"`
-	Temperature float64         `json:"temperature"`
-}
-
-// openAIResponse is the subset of the completions response we consume.
-type openAIResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
 // cacheEntry holds a cached search result with an expiry timestamp.
 type cacheEntry struct {
 	url       string
@@ -69,33 +50,31 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
-// SearchHandler handles /search requests. It holds the OpenAI key, an HTTP
-// client, a per-IP rate limiter map, and a short-lived response cache.
+// SearchHandler handles /search requests. It holds a llmbridge.Provider, a
+// per-IP rate limiter map, and a short-lived response cache.
 type SearchHandler struct {
-	openAIKey string
-	client    *http.Client
+	provider llmbridge.Provider
 
 	// limiterMu guards the per-IP limiter map.
 	limiterMu sync.Mutex
 	limiters  map[string]*rate.Limiter
 
-	// cacheMu guards the prompt → result cache.
+	// cacheMu guards the prompt to result cache.
 	cacheMu sync.RWMutex
 	cache   map[string]cacheEntry
 }
 
-// NewSearchHandler creates a SearchHandler with the given OpenAI API key.
-func NewSearchHandler(openAIKey string) *SearchHandler {
+// NewSearchHandler creates a SearchHandler with the given LLM provider.
+func NewSearchHandler(p llmbridge.Provider) *SearchHandler {
 	return &SearchHandler{
-		openAIKey: openAIKey,
-		client:    &http.Client{Timeout: 15 * time.Second},
-		limiters:  make(map[string]*rate.Limiter),
-		cache:     make(map[string]cacheEntry),
+		provider: p,
+		limiters: make(map[string]*rate.Limiter),
+		cache:    make(map[string]cacheEntry),
 	}
 }
 
 // getLimiter returns a token-bucket rate limiter for the given IP address,
-// creating one on first access (10 requests per second, burst of 5).
+// creating one on first access (burst of 5 requests).
 func (h *SearchHandler) getLimiter(ip string) *rate.Limiter {
 	h.limiterMu.Lock()
 	defer h.limiterMu.Unlock()
@@ -130,13 +109,10 @@ func (h *SearchHandler) storeResult(prompt, searchURL string, intent *SearchInte
 	}
 }
 
-// analyzePrompt sends the user's query to OpenAI and returns a structured
-// SearchIntent describing the parsed search parameters.
+// analyzePrompt sends the user's query to the configured LLM provider and
+// returns a structured SearchIntent describing the parsed search parameters.
 func (h *SearchHandler) analyzePrompt(ctx context.Context, prompt string) (*SearchIntent, error) {
-	messages := []openAIMessage{
-		{
-			Role: "system",
-			Content: `You are a search query analyzer. Extract search parameters and return ONLY a JSON object:
+	const systemPrompt = `You are a search query analyzer. Extract search parameters and return ONLY a JSON object:
 {
     "main_query": "the main search terms",
     "exact_phrases": ["exact phrase 1"],
@@ -145,51 +121,19 @@ func (h *SearchHandler) analyzePrompt(ctx context.Context, prompt string) (*Sear
     "exclude_words": ["word1"],
     "date_range": "2023"
 }
-Use empty arrays [] for missing lists and empty strings "" for missing fields.`,
-		},
-		{Role: "user", Content: prompt},
-	}
+Use empty arrays [] for missing lists and empty strings "" for missing fields.`
 
-	body, err := json.Marshal(openAIRequest{
-		Model:       "gpt-3.5-turbo",
-		Messages:    messages,
-		Temperature: 0.2, // low temperature for deterministic structured output
+	resp, err := h.provider.Complete(ctx, llmbridge.Request{
+		System:      systemPrompt,
+		Messages:    []llmbridge.Message{{Role: "user", Content: prompt}},
+		Temperature: 0.2,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIURL, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+h.openAIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("call OpenAI: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	var aiResp openAIResponse
-	if err := json.Unmarshal(raw, &aiResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-	if aiResp.Error != nil {
-		return nil, fmt.Errorf("OpenAI error: %s", aiResp.Error.Message)
-	}
-	if len(aiResp.Choices) == 0 {
-		return nil, fmt.Errorf("OpenAI returned no choices")
+		return nil, fmt.Errorf("LLM call: %w", err)
 	}
 
 	var intent SearchIntent
-	content := strings.TrimSpace(aiResp.Choices[0].Message.Content)
+	content := strings.TrimSpace(resp.Content)
 	if err := json.Unmarshal([]byte(content), &intent); err != nil {
 		return nil, fmt.Errorf("parse intent JSON: %w (raw: %s)", err, content)
 	}
@@ -247,7 +191,7 @@ func setCORSHeaders(w http.ResponseWriter) {
 // handleSearch is the HTTP handler for POST /search.
 //
 // It enforces per-IP rate limiting, checks a short-lived cache for duplicate
-// prompts, calls OpenAI for new queries, and returns the assembled Google
+// prompts, calls the LLM for new queries, and returns the assembled Google
 // search URL along with the parsed intent.
 func (h *SearchHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	setCORSHeaders(w)
@@ -261,10 +205,10 @@ func (h *SearchHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limiting — keyed by client IP.
+	// Rate limiting, keyed by client IP.
 	ip := r.RemoteAddr
 	if !h.getLimiter(ip).Allow() {
-		http.Error(w, "rate limit exceeded — please slow down", http.StatusTooManyRequests)
+		http.Error(w, "rate limit exceeded, please slow down", http.StatusTooManyRequests)
 		return
 	}
 
@@ -310,13 +254,55 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
-func main() {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required")
+// requireEnv returns the value of the named environment variable or calls
+// log.Fatal if it is not set.
+func requireEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Fatalf("%s environment variable is required", key)
 	}
+	return v
+}
 
-	handler := NewSearchHandler(apiKey)
+// newProvider builds a llmbridge.Provider from LLM_PROVIDER and LLM_MODEL
+// environment variables. Defaults to OpenAI with gpt-4o-mini.
+func newProvider() llmbridge.Provider {
+	name := os.Getenv("LLM_PROVIDER")
+	if name == "" {
+		name = "openai"
+	}
+	model := os.Getenv("LLM_MODEL")
+
+	switch name {
+	case "openai":
+		if model == "" {
+			model = "gpt-4o-mini"
+		}
+		return openai.New(model, requireEnv("OPENAI_API_KEY"))
+	case "anthropic":
+		if model == "" {
+			model = "claude-haiku-4-5-20251001"
+		}
+		return anthropic.New(model, requireEnv("ANTHROPIC_API_KEY"))
+	case "gemini":
+		if model == "" {
+			model = "gemini-2.0-flash"
+		}
+		return gemini.New(model, requireEnv("GEMINI_API_KEY"))
+	case "groq":
+		if model == "" {
+			model = "llama-3.3-70b-versatile"
+		}
+		return compatible.NewGroq(model, requireEnv("GROQ_API_KEY"))
+	default:
+		log.Fatalf("unknown LLM_PROVIDER %q: valid values are openai, anthropic, gemini, groq", name)
+		return nil
+	}
+}
+
+func main() {
+	p := newProvider()
+	handler := NewSearchHandler(p)
 	http.HandleFunc("/search", handler.handleSearch)
 
 	port := os.Getenv("PORT")
@@ -324,7 +310,7 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("smartsearch backend listening on http://localhost:%s", port)
+	log.Printf("smartsearch backend listening on :%s (provider: %s)", port, p.Name())
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal(err)
 	}

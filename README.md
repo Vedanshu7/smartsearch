@@ -22,7 +22,7 @@ Result: https://www.google.com/search?q=python+tutorials+site:docs.python.org+-y
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 19, TailwindCSS 3 |
+| Frontend | React 19, Vite 6, TailwindCSS 3 |
 | Backend | Go |
 | AI | llmbridge (OpenAI, Anthropic, Gemini, Groq) |
 
@@ -66,8 +66,8 @@ export LLM_MODEL=gpt-4o
 ```bash
 cd smart-search
 npm install
-npm start
-# Opens http://localhost:3000
+npm run dev
+# Opens http://localhost:5173
 ```
 
 To point the frontend at a non-default backend:

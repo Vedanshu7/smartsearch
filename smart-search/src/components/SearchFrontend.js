@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Search, Loader2 } from 'lucide-react';
 
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8080';
+
 const SearchFrontend = () => {
   const [prompt, setPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -12,7 +14,7 @@ const SearchFrontend = () => {
     setError('');
 
     try {
-      const response = await fetch('http://localhost:8080/search', {
+      const response = await fetch(`${BACKEND_URL}/search`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -33,7 +35,6 @@ const SearchFrontend = () => {
       }
     } catch (err) {
       setError(err.message);
-      console.error('Search error:', err);
     } finally {
       setIsLoading(false);
     }
@@ -99,7 +100,7 @@ const SearchFrontend = () => {
         </form>
 
         <div className="text-center text-xs text-gray-500">
-          Powered by OpenAI and Google Search
+          Powered by AI and Google Search
         </div>
       </div>
     </div>

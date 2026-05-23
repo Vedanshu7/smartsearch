@@ -1,8 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders search heading', () => {
+test('renders home view', () => {
   render(<App />);
-  const heading = screen.getByText(/AI-Powered Smart Search/i);
-  expect(heading).toBeInTheDocument();
+  expect(screen.getByText(/Describe what you want to find/i)).toBeInTheDocument();
 });

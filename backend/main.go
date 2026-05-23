@@ -133,7 +133,7 @@ Use empty arrays [] for missing lists and empty strings "" for missing fields.`
 	}
 
 	var intent SearchIntent
-	content := strings.TrimSpace(resp.Content)
+	content := stripCodeFence(strings.TrimSpace(resp.Content))
 	if err := json.Unmarshal([]byte(content), &intent); err != nil {
 		return nil, fmt.Errorf("parse intent JSON: %w (raw: %s)", err, content)
 	}
@@ -147,6 +147,15 @@ Use empty arrays [] for missing lists and empty strings "" for missing fields.`
 	}
 
 	return &intent, nil
+}
+
+// stripCodeFence removes a leading ```json or ``` fence and trailing ``` from s.
+// Some providers wrap JSON responses in markdown code blocks despite instructions.
+func stripCodeFence(s string) string {
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	return strings.TrimSpace(s)
 }
 
 // buildSearchURL assembles a Google search URL from a parsed SearchIntent.

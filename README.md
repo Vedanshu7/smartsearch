@@ -73,7 +73,7 @@ npm run dev
 To point the frontend at a non-default backend:
 
 ```bash
-echo "REACT_APP_BACKEND_URL=http://localhost:8080" > .env.local
+echo "VITE_BACKEND_URL=http://localhost:8080" > .env.local
 ```
 
 ## Environment Variables
@@ -94,7 +94,7 @@ echo "REACT_APP_BACKEND_URL=http://localhost:8080" > .env.local
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `REACT_APP_BACKEND_URL` | No | `http://localhost:8080` | Backend base URL |
+| `VITE_BACKEND_URL` | No | `http://localhost:8080` | Backend base URL |
 
 ## Project Structure
 

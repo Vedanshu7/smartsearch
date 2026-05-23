@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Search, Loader2 } from 'lucide-react';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8080';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080';
 
 const SearchFrontend = () => {
   const [prompt, setPrompt] = useState('');

@@ -64,7 +64,7 @@ export LLM_MODEL=gpt-4o
 ### 2. Frontend
 
 ```bash
-cd smart-search
+cd ui
 npm install
 npm run dev
 # Opens http://localhost:5173
@@ -88,7 +88,20 @@ echo "VITE_BACKEND_URL=http://localhost:8080" > .env.local
 | `ANTHROPIC_API_KEY` | If `LLM_PROVIDER=anthropic` | | Anthropic API key |
 | `GEMINI_API_KEY` | If `LLM_PROVIDER=gemini` | | Google Gemini API key |
 | `GROQ_API_KEY` | If `LLM_PROVIDER=groq` | | Groq API key |
+| `SERPER_API_KEY` | No | | [Serper.dev](https://serper.dev) key for real in-app results (2 500 free/month) |
 | `PORT` | No | `8080` | HTTP listen port |
+
+### Real search results (optional)
+
+Google blocks iframe embedding. To display actual search results inside the app, set `SERPER_API_KEY`:
+
+```bash
+# Get a free key at https://serper.dev (no credit card for free tier)
+export SERPER_API_KEY=your-serper-key
+go run main.go
+```
+
+Without this variable the app shows a faux-browser summary card and an "Open in Google" button. With it, a Google-style results list (titles, URLs, snippets) renders directly in the app.
 
 ### Frontend
 
@@ -104,10 +117,10 @@ smartsearch/
 │   ├── main.go          # Go HTTP server with llmbridge integration
 │   ├── go.mod
 │   └── go.sum
-├── smart-search/
+├── ui/
 │   ├── public/
 │   └── src/
-│       └── components/SearchFrontend.js  # React UI
+│       └── components/SearchFrontend.jsx  # React UI
 ├── .env.example
 └── README.md
 ```
